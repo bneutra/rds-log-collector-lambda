@@ -2,11 +2,11 @@ provider "aws" {
   region = var.region
 }
 locals {
-  lambda_name = "${var.prefix}-rds-failures"
+  lambda_name = "${var.prefix}${var.region}-rds-failures"
 }
 
 # create webhook
-module "webhook" {
+module "rds_lambda" {
   source             = "terraform-aws-modules/lambda/aws"
   version            = "7.4.0"
   function_name      = local.lambda_name
@@ -28,8 +28,7 @@ module "webhook" {
   ]
 
   environment_variables = {
-    REGION         = var.region
-    #S3_BUCKET      = aws_s3_bucket.rds-event-storage.id
+    CLOUDWATCH_LOG_GROUP_NAME = module.rds_lambda.lambda_cloudwatch_log_group_name
   }
   tags = {
     datadog  = true
@@ -39,7 +38,7 @@ module "webhook" {
 }
 
 resource "aws_iam_policy" "lambda_policy" {
-  name   = "${var.prefix}-state-saver-lambda-webhook-policy"
+  name   = local.lambda_name
   policy = data.aws_iam_policy_document.lambda_policy_definition.json
 }
 
@@ -53,5 +52,15 @@ data "aws_iam_policy_document" "lambda_policy_definition" {
     effect    = "Allow"
     actions   = ["rds:Describe*"]
     resources = [ "*" ]
+  }
+  statement {
+    effect    = "Allow"
+    actions   = [
+      "logs:FilterLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams"]
+    resources = [
+      "${module.rds_lambda.lambda_cloudwatch_log_group_arn}:*:*",
+      "${module.rds_lambda.lambda_cloudwatch_log_group_arn}:*"]
   }
 }

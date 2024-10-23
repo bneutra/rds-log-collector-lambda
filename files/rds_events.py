@@ -1,7 +1,15 @@
 import boto3
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
+
+
+# If we see this message, no need to gather logs again
+# for the same instance in the last N minutes
+GATHERING_MSG="Gathering events and logs for %s"
+COOLOFF_MINUTES = 30
+LOG_GROUP_NAME = os.environ.get("CLOUDWATCH_LOG_GROUP_NAME")
 
 
 def log_event_payload(db_instance_id: str, payload: dict) -> None:
@@ -22,8 +30,37 @@ def download_log_file(rds_client, db_instance_id: str, log_file: str) -> dict:
     return response
 
 
+def is_already_logged(database_instance_id: str, cloudwatch_logs_client, minutes: int = COOLOFF_MINUTES) -> bool:
+    # if we've already gathered logs for this instance in the last N minutes
+    # no need to do it again. We're basically using cloudwatch logs as state store here.
+    time_now = datetime.now(timezone.utc)
+    time_minutes_ago = time_now - timedelta(minutes=minutes)
+    start_time = int(time_minutes_ago.timestamp() * 1000)
+    end_time = int(time_now.timestamp() * 1000)
+    msg = GATHERING_MSG % database_instance_id
+    # Retrieve log events from the specified log group (and optionally log stream)
+    response = cloudwatch_logs_client.filter_log_events(
+        logGroupName=LOG_GROUP_NAME,
+        startTime=start_time,
+        endTime=end_time,
+        filterPattern=f"%{msg}%",
+        limit=10000
+    )
+
+    if len(response['events']):
+        timestamp = response['events'][0]['timestamp']
+        dt = datetime.fromtimestamp(timestamp / 1000.0)
+        print(f"Already gathered events for {database_instance_id} at {dt}")
+        return True
+    return False
+
+
 def gather_db_events(db_instance_id: str,hours: int = 3) -> None:
-    # Create a boto3 RDS client
+    client = boto3.client('logs')
+    if is_already_logged(db_instance_id, client):
+        return
+
+    log_event_payload(db_instance_id, {"message": GATHERING_MSG % db_instance_id})
     rds_client = boto3.client('rds')
 
     # Set up the start and end times for event collection
@@ -40,7 +77,7 @@ def gather_db_events(db_instance_id: str,hours: int = 3) -> None:
 
     # Print recent events
     for event in events['Events']:
-        log_event_payload(db_instance_id, event)
+        log_event_payload(db_instance_id, dict(event))
 
     response = rds_client.describe_db_log_files(
         DBInstanceIdentifier=db_instance_id,

@@ -1,6 +1,6 @@
 variable "prefix" {
   description = "Name prefix to add to the resources"
-  default     = "brendan-test-rds-events"
+  default     = "brendan-test-"
 }
 
 variable "region" {
